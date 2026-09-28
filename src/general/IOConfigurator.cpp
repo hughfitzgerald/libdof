@@ -6,6 +6,10 @@
 #include "../cab/out/pspico/PinscapePico.h"
 #endif
 
+#ifdef __LIBUSB__
+#include "../cab/out/pac/PacDriveSingleton.h"
+#endif
+
 #include <string>
 
 namespace DOF
@@ -20,6 +24,11 @@ void IOConfigurator::Initialize()
 
 void IOConfigurator::Shutdown()
 {
+#ifdef __LIBUSB__
+   // Release libusb here rather than in the singleton's static destructor, which runs under the loader lock
+   // when the library is unloaded and deadlocks while libusb_exit joins libusb's internal threads.
+   PacDriveSingleton::ShutdownInstance();
+#endif
 #ifdef __HIDAPI__
    Pinscape::ClearDevices();
    PinscapePico::ClearDevices();

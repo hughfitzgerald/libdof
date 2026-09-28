@@ -6,23 +6,45 @@
 namespace DOF
 {
 
+std::atomic<PacDriveSingleton*> PacDriveSingleton::s_instance { nullptr };
+
 PacDriveSingleton& PacDriveSingleton::GetInstance()
 {
+   // The object itself lives until the library is unloaded (PacUIO units keep a pointer to it),
+   // but its USB resources are released by ShutdownInstance() and lazily re-acquired here.
    static PacDriveSingleton instance;
+   if (!instance.m_initialized.load(std::memory_order_acquire))
+      instance.Initialize();
    return instance;
 }
 
-PacDriveSingleton::PacDriveSingleton()
-   : m_numDevices(0)
-   , m_usbContext(nullptr)
+void PacDriveSingleton::ShutdownInstance()
 {
-   Initialize();
+   if (PacDriveSingleton* instance = s_instance.load(std::memory_order_acquire))
+      instance->Shutdown();
 }
 
-PacDriveSingleton::~PacDriveSingleton() { Shutdown(); }
+PacDriveSingleton::PacDriveSingleton()
+   : m_initialized(false)
+   , m_numDevices(0)
+   , m_usbContext(nullptr)
+{
+   s_instance.store(this, std::memory_order_release);
+}
+
+PacDriveSingleton::~PacDriveSingleton()
+{
+   // Should already be a no-op: calling libusb_exit from a static destructor (i.e. under the loader lock on Windows) can deadlock.
+   Shutdown();
+   s_instance.store(nullptr, std::memory_order_release);
+}
 
 void PacDriveSingleton::Initialize()
 {
+   std::lock_guard<std::mutex> initLock(m_initMutex);
+   if (m_initialized.load(std::memory_order_relaxed))
+      return;
+
    int result = libusb_init(&m_usbContext);
    if (result < 0)
    {
@@ -31,10 +53,16 @@ void PacDriveSingleton::Initialize()
    }
 
    EnumerateDevices();
+   m_initialized.store(true, std::memory_order_release);
 }
 
 void PacDriveSingleton::Shutdown()
 {
+   std::lock_guard<std::mutex> initLock(m_initMutex);
+   if (!m_initialized.load(std::memory_order_relaxed))
+      return;
+   m_initialized.store(false, std::memory_order_release);
+
    std::lock_guard<std::mutex> lock(m_hidDevicesMutex);
    for (auto& pair : m_hidDevices)
    {

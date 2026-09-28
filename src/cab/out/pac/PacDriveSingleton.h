@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <memory>
 #include <map>
@@ -35,6 +36,12 @@ public:
 
    static PacDriveSingleton& GetInstance();
 
+   // Releases USB resources (including libusb_exit) if the instance was ever created.
+   // Must be called before the library is unloaded: libusb_exit joins libusb's internal
+   // threads, which deadlocks under the loader lock if left to the static destructor.
+   // The instance re-initializes itself on the next GetInstance() call.
+   static void ShutdownInstance();
+
    std::vector<int> PacLed64GetIdList();
    int PacLed64GetIndexForDeviceId(int id);
    int PacLed64GetDeviceId(int index);
@@ -63,6 +70,10 @@ private:
 
    PacDriveSingleton(const PacDriveSingleton&) = delete;
    PacDriveSingleton& operator=(const PacDriveSingleton&) = delete;
+
+   static std::atomic<PacDriveSingleton*> s_instance;
+   std::atomic<bool> m_initialized;
+   std::mutex m_initMutex;
 
    struct DeviceInfo
    {
